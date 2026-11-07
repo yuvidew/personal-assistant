@@ -1,8 +1,9 @@
 import { webhooks } from "@trigger.dev/sdk";
-import { chat } from "@trigger.dev/sdk/ai";
-import { defaultStorage } from "@trigger.dev/sdk/ai";
+import { chat, defaultStorage } from "@trigger.dev/sdk/ai";
 import { stepCountIs } from "ai";
+import { AlexandriaTools, scrape as scrapePage } from "firecrawl-aisdk";
 import { model } from "../ai.js";
+import { buildTelegramInstructions } from "./telegram-instructions.js";
 
 type TelegramUpdate = {
   update_id: number;
@@ -67,21 +68,36 @@ const telegram = chat.channels.custom({
   },
 });
 
+// Live-information tools. Customers never see these names; the instructions tell the
+// model to decide on its own when a request needs fresh data and to never mention them.
+//   search / findTools / scrape: web search plus specialised live data sources
+//   readPage: read the full contents of a specific web page
+const { search, findTools, scrape: runDataSource } = AlexandriaTools();
+const tools = {
+  search,
+  findTools,
+  scrape: runDataSource,
+  readPage: scrapePage,
+};
+
 export const telegramAgent = chat.agent({
   id: "telegram-agent",
   channels: [telegram],
+  // Declared here AND passed to streamText below, so tool output formatting is
+  // re-applied when history is rebuilt on later turns.
+  tools,
   // Transcript persistence: the conversation (UIMessages) is stored by the platform in
   // object storage, keyed by the Telegram chat id. No database needed. Each turn the
   // runtime rebuilds the model's context from it, so memory survives idle gaps,
   // deploys and fresh runs. (This is the default; it is set explicitly for clarity.)
   storage: defaultStorage,
-  run: async ({ messages, signal, streamText }) =>
+  run: async ({ messages, tools, signal, streamText }) =>
     streamText({
       model,
-      system:
-        "You are a helpful personal assistant on Telegram. Keep replies concise and plain text.",
+      system: buildTelegramInstructions(),
       messages,
+      tools,
       abortSignal: signal,
-      stopWhen: stepCountIs(10),
+      stopWhen: stepCountIs(15),
     }),
 });
