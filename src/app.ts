@@ -1,5 +1,7 @@
 import { Hono } from 'hono'
 import { timingSafeEqual } from 'node:crypto'
+import { generateText } from 'ai'
+import { model } from './ai.js'
 
 const app = new Hono()
 
@@ -33,7 +35,7 @@ const telegram = (method: string, body: unknown) =>
     body: JSON.stringify(body)
   })
 
-// Telegram webhook: echoes back whatever the user sent
+// Telegram webhook: replies with an AI-generated response
 app.post('/telegram/webhook', async (c) => {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET
   const header = c.req.header('X-Telegram-Bot-Api-Secret-Token') ?? ''
@@ -44,14 +46,22 @@ app.post('/telegram/webhook', async (c) => {
   const update = await c.req.json<TelegramUpdate>()
   const msg = update.message
   if (msg) {
-    // Text -> sendMessage; anything else (photo, sticker, voice...) -> copyMessage
-    const res = msg.text
-      ? await telegram('sendMessage', { chat_id: msg.chat.id, text: msg.text })
-      : await telegram('copyMessage', {
-          chat_id: msg.chat.id,
-          from_chat_id: msg.chat.id,
-          message_id: msg.message_id
+    let text = "I can only read text messages for now."
+    if (msg.text) {
+      try {
+        const result = await generateText({
+          model,
+          system: 'You are a helpful personal assistant on Telegram. Keep replies concise.',
+          prompt: msg.text
         })
+        // Telegram caps messages at 4096 characters
+        text = result.text.slice(0, 4096) || '...'
+      } catch (err) {
+        console.error('AI generation failed', err)
+        text = 'Sorry, something went wrong. Please try again.'
+      }
+    }
+    const res = await telegram('sendMessage', { chat_id: msg.chat.id, text })
     if (!res.ok) console.error('Telegram API error', res.status, await res.text())
   }
 
