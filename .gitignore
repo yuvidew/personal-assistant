@@ -32,3 +32,4 @@ dist/
 .trigger
 pnpm-lock.yaml
 pnpm-workspace.yaml
+imags

@@ -1,27 +1,15 @@
-Set up Trigger.dev in this project.
+Help me set up Daytona in this project. Before writing any Daytona code, verify the setup:
 
-Trigger.dev runs your background tasks. This is an existing codebase — add Trigger.dev to it and get one task running in the development environment.
+1. Check that the Daytona SDK is installed for the language used in this project. If not, install it.
 
-Project reference: proj_bkmweqkcddkdnvesdojq
+  Python: `pip install daytona`
+  TypeScript: `bun add @daytona/sdk`
+  Ruby: `gem install daytona`
+  Go: `go get github.com/daytona/clients/sdk-go`
+  Java: add the `io.daytona:sdk` dependency to `build.gradle.kts` or `pom.xml`
 
-How to do it:
-1. If you have the Trigger.dev MCP server available, use its "initialize_project" tool with the project reference above.
-2. Otherwise run this and follow its output:
-   bunx trigger.dev@latest init -p proj_bkmweqkcddkdnvesdojq
-3. If you set it up by hand, follow https://trigger.dev/docs/manual-setup and make sure you end up with:
-   - "@trigger.dev/sdk" installed (latest) and "@trigger.dev/build" as a dev dependency
-   - a trigger.config.ts with: import { defineConfig } from "@trigger.dev/sdk", project: "proj_bkmweqkcddkdnvesdojq", dirs: ["./src/trigger"], and a maxDuration
-   - a src/trigger/ directory with at least one exported task created with task() from "@trigger.dev/sdk"
-   - trigger.config.ts added to tsconfig "include", and ".trigger" added to .gitignore
+2. Check DAYTONA_API_KEY in the shell environment or in environment files. If not set, tell the user they need an API key and point them to https://app.daytona.io/dashboard/keys to create one.
 
-Golden rules:
-- Import from "@trigger.dev/sdk". Never "@trigger.dev/sdk/v3" or the deprecated client.defineJob.
-- Export every task, including subtasks.
-- Use the built-in fetch, not node-fetch.
-- Never wrap wait.*, triggerAndWait, or batchTriggerAndWait in Promise.all.
+3. Write a script that initializes the Daytona client, creates a sandbox, runs a "Hello World" program inside it, captures the output, and deletes the sandbox.
 
-Two steps I have to do myself — ask me when you need them:
-- Running "bunx trigger.dev@latest login" (it opens a browser).
-- Giving you the development TRIGGER_SECRET_KEY from the dashboard to put in .env.
-
-When you're done, run "bunx trigger.dev@latest dev" and confirm the task shows up in the Trigger.dev dashboard.
+4. Run the script to verify the sandbox works.

@@ -3,16 +3,63 @@ import { chat, defaultStorage } from "@trigger.dev/sdk/ai";
 import { stepCountIs } from "ai";
 import { AlexandriaTools, scrape as scrapePage } from "firecrawl-aisdk";
 import { model } from "../ai.js";
+import { createSandboxTools } from "./sandbox-tools.js";
+import { sendTelegramMessage } from "./telegram-api.js";
 import { buildTelegramInstructions } from "./telegram-instructions.js";
+
+type TelegramFile = { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
 
 type TelegramUpdate = {
   update_id: number;
   message?: {
     message_id: number;
     chat: { id: number };
+    from?: { id: number };
     text?: string;
+    caption?: string;
+    document?: TelegramFile;
+    photo?: Array<TelegramFile & { width: number; height: number }>;
+    voice?: TelegramFile;
+    audio?: TelegramFile;
+    video?: TelegramFile;
+    video_note?: TelegramFile;
+    sticker?: { emoji?: string };
   };
 };
+
+// Describe each attachment as text. The model never receives raw bytes: it calls
+// `importUserFile` with the file_id to copy the file into its sandbox, then works on it there.
+// (Keeps this model-agnostic: no PDF/file-part support is needed from the LLM.)
+function describeAttachments(m: NonNullable<TelegramUpdate["message"]>): string[] {
+  const kb = (f: TelegramFile) => (f.file_size ? `, ${(f.file_size / 1024).toFixed(1)} KB` : "");
+  const lines: string[] = [];
+  if (m.document) {
+    const d = m.document;
+    lines.push(
+      `[Attached file: name="${d.file_name ?? "document"}", type=${d.mime_type ?? "unknown"}${kb(d)}, file_id=${d.file_id}]`
+    );
+  }
+  if (m.photo?.length) {
+    // Telegram sends several sizes; the last is the largest.
+    const p = m.photo[m.photo.length - 1];
+    lines.push(`[Attached photo: ${p.width}x${p.height}${kb(p)}, suggested name="photo-${p.file_id.slice(-8)}.jpg", file_id=${p.file_id}]`);
+  }
+  const media: Array<[string, TelegramFile | undefined, string]> = [
+    ["voice message", m.voice, "ogg"],
+    ["audio", m.audio, "mp3"],
+    ["video", m.video, "mp4"],
+    ["video note", m.video_note, "mp4"],
+  ];
+  for (const [label, f, ext] of media) {
+    if (f) {
+      lines.push(
+        `[Attached ${label}: name="${f.file_name ?? `${label.replace(" ", "-")}.${ext}`}", type=${f.mime_type ?? "unknown"}${kb(f)}, file_id=${f.file_id}]`
+      );
+    }
+  }
+  if (m.sticker) lines.push(`[Sticker ${m.sticker.emoji ?? ""}]`);
+  return lines;
+}
 
 // Hosted inbound webhook. Trigger.dev verifies Telegram's secret-token header
 // (set via `setWebhook`'s `secret_token`) before anything reaches the agent, and
@@ -33,32 +80,25 @@ export const telegramEndpoint = webhooks.endpoint.define({
   ),
 });
 
-const TELEGRAM_MAX_LENGTH = 4096;
-
-async function sendTelegramMessage(chatId: number, text: string) {
-  const res = await fetch(
-    `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: text.slice(0, TELEGRAM_MAX_LENGTH) || "..." }),
-    }
-  );
-  if (!res.ok) throw new Error(`Telegram sendMessage failed: ${res.status} ${await res.text()}`);
-}
-
 // One session per Telegram chat: `key` is the chat id, so every message from the same
 // chat reaches the same conversation, and a later run picks the history back up.
 const telegram = chat.channels.custom({
   id: "telegram",
   endpoint: telegramEndpoint,
   key: "{event.message.chat.id}",
-  // Ignore updates that aren't text messages (edits, stickers, joins, ...).
-  filter: "event.message.text != null",
-  inbound: (update) => ({
-    message: update.message?.text ?? "",
-    externalMessageId: String(update.message?.message_id ?? ""),
-  }),
+  // Accept any new message (text, files, photos, voice, ...). Edits, joins and other
+  // update types have no `message` and are ignored.
+  filter: "event.message != null",
+  inbound: (update) => {
+    const m = update.message;
+    const text = m?.text ?? m?.caption ?? "";
+    const attachments = m ? describeAttachments(m) : [];
+    return {
+      message: [text, ...attachments].filter(Boolean).join("\n") || "[Empty message]",
+      externalMessageId: String(m?.message_id ?? ""),
+      externalUserId: m?.from ? String(m.from.id) : undefined,
+    };
+  },
   outbound: (reply) => (reply.text ? { text: reply.text } : null),
   send: async (message, ctx) => {
     const chatId = ctx.event?.message?.chat.id;
@@ -91,12 +131,14 @@ export const telegramAgent = chat.agent({
   // runtime rebuilds the model's context from it, so memory survives idle gaps,
   // deploys and fresh runs. (This is the default; it is set explicitly for clarity.)
   storage: defaultStorage,
-  run: async ({ messages, tools, signal, streamText }) =>
+  run: async ({ messages, tools, signal, streamText, chatId }) =>
     streamText({
       model,
       system: buildTelegramInstructions(),
       messages,
-      tools,
+      // chatId is the Telegram chat id (the channel session key), so the sandbox tools can
+      // scope the per-chat computer and send files back to the right chat.
+      tools: { ...tools, ...createSandboxTools(chatId) },
       abortSignal: signal,
       stopWhen: stepCountIs(15),
     }),
